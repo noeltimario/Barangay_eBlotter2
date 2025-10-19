@@ -1,0 +1,859 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import {
+    getFirestore, collection, query, onSnapshot, doc,
+    setDoc, addDoc, updateDoc, deleteDoc, getDocs
+} from 'firebase/firestore';
+
+// --- Global Variables (Provided by Canvas Environment) ---
+// These are mandatory global variables for Firebase integration.
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-barangay-app';
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Helper Icons (Simulated Lucide Icons for single-file use)
+const Icon = ({ name, className = 'w-5 h-5' }) => {
+    // A simple mapping for icons using SVG paths.
+    const icons = {
+        LayoutDashboard: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="9" y1="21" x2="9" y2="9" /></svg>,
+        FileText: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7l-5-5z" /><path d="M10 12h4" /><path d="M10 16h4" /><path d="M15 2v5h5" /></svg>,
+        ClipboardList: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="9" y="4" width="6" height="4" rx="1" ry="1" /><path d="M8 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-4" /><path d="M12 11h4" /><path d="M12 15h4" /><path d="M8 15h.01" /><path d="M8 11h.01" /></svg>,
+        BarChart: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" /></svg>,
+        Bot: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 8V4" /><rect x="2" y="4" width="20" height="12" rx="2" /><path d="M2 10h20" /><path d="M8 16c0 1.5 1 2 4 2s4-.5 4-2" /><path d="M10 9l.01 0" /><path d="M14 9l.01 0" /></svg>,
+        Trash2: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M15 2v2" /><path d="M9 2v2" /></svg>,
+        Edit: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" /></svg>,
+        Download: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>,
+        User: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 mr-2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>,
+        Check: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 mr-1"><polyline points="20 6 9 17 4 12" /></svg>,
+        X: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 mr-1"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>,
+    };
+    return icons[name] || <span>?</span>;
+};
+
+// --- Initial Data and Constants ---
+const BLOTTER_COLLECTION_PATH = `artifacts/${appId}/public/data/blotter_entries`;
+const USER_ROLES = ['Barangay Captain', 'Secretary', 'Staff'];
+
+const generateCaseNumber = () => {
+    const timestamp = Date.now().toString().slice(-6);
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `INC-${timestamp}-${random}`;
+};
+
+// --- Utility Functions for Firestore (Simulated with retry logic) ---
+const callWithRetry = async (fn, maxRetries = 3) => {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (i < maxRetries - 1) {
+                // Exponential backoff
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+            } else {
+                console.error("Firebase operation failed after max retries:", error);
+                throw error;
+            }
+        }
+    }
+};
+
+// --- Custom Components ---
+
+// Dashboard Component
+const Dashboard = ({ blotterEntries }) => {
+    const totalCases = blotterEntries.length;
+    const openCases = blotterEntries.filter(e => e.status === 'Open').length;
+    const resolvedCases = blotterEntries.filter(e => e.status === 'Resolved').length;
+
+    // Simulated AI Analytics (Hotspot & Trend Detection)
+    const hotSpot = useMemo(() => {
+        const locations = blotterEntries.map(e => e.location || 'Undisclosed').reduce((acc, loc) => {
+            acc[loc] = (acc[loc] || 0) + 1;
+            return acc;
+        }, {});
+        const sorted = Object.entries(locations).sort(([, a], [, b]) => b - a);
+        return sorted.length > 0 ? sorted[0][0] : 'N/A';
+    }, [blotterEntries]);
+
+    const recurringDisputeType = useMemo(() => {
+        const types = blotterEntries.map(e => e.type).reduce((acc, type) => {
+            acc[type] = (acc[type] || 0) + 1;
+            return acc;
+        }, {});
+        const sorted = Object.entries(types).sort(([, a], [, b]) => b - a);
+        return sorted.length > 0 ? sorted[0][0] : 'N/A';
+    }, [blotterEntries]);
+
+    const statusData = [
+        { name: 'Open', count: openCases, color: 'bg-red-500' },
+        { name: 'Resolved', count: resolvedCases, color: 'bg-green-500' },
+        { name: 'Referred', count: totalCases - openCases - resolvedCases, color: 'bg-yellow-500' },
+    ];
+
+    return (
+<div className="space-y-6">
+    <h2 className="text-3xl font-bold text-gray-800">Barangay Operations Dashboard</h2>
+
+    {/* KPI Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card title="Total Recorded Cases" value={totalCases} icon="ClipboardList" color="bg-blue-600" />
+        <Card title="Open Cases (Urgent)" value={openCases} icon="FileText" color="bg-red-600" />
+        <Card title="Resolved Cases" value={resolvedCases} icon="Check" color="bg-green-600" />
+        <Card title="AI Detected Hotspot" value={hotSpot} icon="BarChart" color="bg-purple-600" />
+    </div>
+
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Status Breakdown Chart (Simulated) */}
+        <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg border border-gray-100">
+            <h3 className="text-xl font-semibold mb-4 text-gray-700">Case Status Breakdown</h3>
+            <div className="h-48 flex items-end justify-between space-x-4 pt-4">
+                {statusData.map(item => (
+                <div key={item.name} className="flex flex-col items-center w-full">
+                    <div className={`w-full ${item.color} rounded-t-lg transition-all duration-500 hover:opacity-80`}
+                         style={{ height: `${(item.count / totalCases) * 100 || 0}%`, maxHeight: '100%', minHeight: '10px' }}>
+                    </div>
+                    <p className="mt-2 text-sm font-medium text-gray-600">{item.name}</p>
+                    <p className="text-lg font-bold text-gray-800">{item.count}</p>
+                </div>
+                ))}
+            </div>
+        </div>
+
+        {/* AI Analytics Summary */}
+        <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg border border-gray-100">
+            <h3 className="text-xl font-semibold mb-4 text-gray-700 flex items-center">
+                <Icon name="Bot" className="w-6 h-6 mr-2 text-purple-600" /> AI Analytics Summary
+            </h3>
+            <div className="space-y-4">
+                <p><strong>Top Hotspot:</strong> <span className="text-purple-600 font-medium">{hotSpot}</span></p>
+                <p><strong>Recurring Issue:</strong> <span className="text-purple-600 font-medium">{recurringDisputeType}</span></p>
+                <p><strong>System Alert:</strong> <span className="text-red-500 font-medium">{openCases > 5 ? 'High volume of Open Cases.' : 'Case load is stable.'}</span></p>
+                <p className="text-sm text-gray-500 mt-4 border-t pt-3">
+                    *Insights generated from simulated case pattern recognition engine.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+    );
+};
+
+// Reusable Card Component
+const Card = ({ title, value, icon, color }) => (
+<div className="bg-white p-5 rounded-xl shadow-lg border-b-4 border-l-2 border-gray-100 transition-all duration-300 hover:shadow-xl">
+    <div className="flex justify-between items-start">
+        <div>
+            <p className="text-sm font-medium text-gray-500">{title}</p>
+            <h3 className="mt-1 text-2xl font-extrabold text-gray-900 truncate">{value}</h3>
+        </div>
+        <div className={`p-3 rounded-full ${color} text-white bg-opacity-80`}>
+            <Icon name={icon} className="w-6 h-6" />
+        </div>
+    </div>
+</div>
+);
+
+// Blotter Management Component
+const BlotterManager = ({ db, userId, role, blotterEntries, fetchBlotterEntries }) => {
+    const [isFormOpen, setIsFormOpen] = useState(false);
+    const [isEditing, setIsEditing] = useState(false);
+    const [currentEntry, setCurrentEntry] = useState(null);
+    const [search, setSearch] = useState('');
+
+    const filteredEntries = blotterEntries.filter(entry =>
+        entry.caseNumber.toLowerCase().includes(search.toLowerCase()) ||
+        entry.complainant.toLowerCase().includes(search.toLowerCase()) ||
+        entry.description.toLowerCase().includes(search.toLowerCase())
+    ).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const openEditForm = (entry) => {
+        setCurrentEntry(entry);
+        setIsEditing(true);
+        setIsFormOpen(true);
+    };
+
+    const openNewForm = () => {
+        setCurrentEntry({
+            caseNumber: generateCaseNumber(),
+            type: 'Complaint',
+            date: new Date().toISOString().substring(0, 10),
+            complainant: '',
+            location: '',
+            description: '',
+            status: 'Open',
+            recordedBy: userId,
+            role: role,
+        });
+        setIsEditing(false);
+        setIsFormOpen(true);
+    };
+
+    const closeForm = () => {
+        setIsFormOpen(false);
+        setCurrentEntry(null);
+    };
+
+    const handleDelete = async (id) => {
+        if (!['Barangay Captain', 'Secretary'].includes(role)) {
+            alert('Authorization failed: Only Captain or Secretary can delete records.');
+            return;
+        }
+
+        if (window.confirm('Are you sure you want to delete this blotter entry? This action cannot be undone.')) {
+            try {
+                const docRef = doc(db, BLOTTER_COLLECTION_PATH, id);
+                await callWithRetry(() => deleteDoc(docRef));
+                console.log("Document successfully deleted!");
+            } catch (error) {
+                console.error("Error deleting document: ", error);
+            }
+        }
+    };
+
+    const handleUpdateStatus = async (entry, newStatus) => {
+        if (!['Barangay Captain', 'Secretary'].includes(role) && newStatus !== 'Open') {
+            alert('Authorization failed: Only Captain or Secretary can change status from Open.');
+            return;
+        }
+
+        try {
+            const docRef = doc(db, BLOTTER_COLLECTION_PATH, entry.id);
+            await callWithRetry(() => updateDoc(docRef, { status: newStatus }));
+            console.log("Status successfully updated!");
+        } catch (error) {
+            console.error("Error updating status: ", error);
+        }
+    };
+
+    return (
+<div className="space-y-6">
+    <h2 className="text-3xl font-bold text-gray-800">Digital Blotter & Case Management</h2>
+
+    <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
+        <button onClick={openNewForm}
+                className="w-full sm:w-auto px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center">
+            <Icon name="FileText" className="w-5 h-5 mr-2" /> New Blotter Entry
+        </button>
+        <input type="text"
+               placeholder="Search by Case #, Complainant, or Keyword..."
+               value={search}
+               onChange={(e) => setSearch(e.target.value)}
+        className="w-full sm:w-1/2 p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition"
+        />
+    </div>
+
+    <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+        <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+                <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Case #</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Complainant</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Date</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+                {filteredEntries.length === 0 ? (
+                <tr><td colSpan="5" className="px-6 py-4 text-center text-gray-500">No blotter entries found.</td></tr>
+                ) : (
+                filteredEntries.map((entry) => (
+                <tr key={entry.id} className="hover:bg-blue-50 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {entry.caseNumber}
+                        <div className="text-xs text-gray-500 block sm:hidden">{entry.type}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{entry.complainant}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 hidden sm:table-cell">{entry.date}</td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full
+                              ${entry.status= = ='Open' ? 'bg-red-100 text-red-800' :
+                              entry.status= = ='Resolved' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800' }`}>
+                            {entry.status}
+                        </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <div className="flex space-x-2">
+                            <button onClick={() =>
+                                openEditForm(entry)} title="Edit" className="text-blue-600 hover:text-blue-900 p-1 rounded-full hover:bg-blue-100 transition-colors">
+                                <Icon name="Edit" className="w-5 h-5" />
+                            </button>
+                            <button onClick={() =>
+                                handleUpdateStatus(entry, entry.status === 'Resolved' ? 'Open' : 'Resolved')}
+                                title={entry.status === 'Resolved' ? 'Reopen Case' : 'Resolve Case'}
+                                className={`${entry.status === 'Resolved' ? 'text-red-600 hover:text-red-900' : 'text-green-600 hover:text-green-900'} p-1 rounded-full hover:bg-gray-100 transition-colors`}
+                                >
+                                <Icon name={entry.status = = ='Resolved' ? 'X' : 'Check' } className="w-5 h-5" />
+                            </button>
+                            {['Barangay Captain', 'Secretary'].includes(role) && (
+                            <button onClick={() =>
+                                handleDelete(entry.id)} title="Delete" className="text-gray-400 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition-colors">
+                                <Icon name="Trash2" className="w-5 h-5" />
+                            </button>
+                            )}
+                        </div>
+                    </td>
+                </tr>
+                ))
+                )}
+            </tbody>
+        </table>
+    </div>
+
+    {/* Modal for Blotter Form */}
+    {isFormOpen && (
+    <BlotterForm db={db}
+                 entry={currentEntry}
+                 isEditing={isEditing}
+                 onClose={closeForm}
+                 userId={userId}
+                 role={role} />
+    )}
+</div>
+    );
+};
+
+// Blotter Entry Form Component (Modal)
+const BlotterForm = ({ db, entry, isEditing, onClose, userId, role }) => {
+    const [formData, setFormData] = useState(entry);
+    const [loading, setLoading] = useState(false);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+
+        const dataToSave = {
+            ...formData,
+            recordedBy: isEditing ? formData.recordedBy : userId, // Preserve original recorder
+            role: isEditing ? formData.role : role,
+            date: formData.date || new Date().toISOString().substring(0, 10), // Ensure date exists
+        };
+
+        try {
+            if (isEditing) {
+                // Update existing document
+                const docRef = doc(db, BLOTTER_COLLECTION_PATH, formData.id);
+                await callWithRetry(() => updateDoc(docRef, dataToSave));
+                console.log("Document updated successfully!");
+            } else {
+                // Add new document
+                await callWithRetry(() => addDoc(collection(db, BLOTTER_COLLECTION_PATH), dataToSave));
+                console.log("Document added successfully!");
+            }
+            onClose();
+        } catch (error) {
+            console.error("Error saving document: ", error);
+            alert(`Error saving entry: ${error.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Simple File Upload Placeholder (Actual file storage is complex, so we simulate the field)
+    const handleFileChange = (e) => {
+        if (e.target.files.length > 0) {
+            alert(`File '${e.target.files[0].name}' selected. NOTE: Actual file upload to cloud storage is disabled in this demo.`);
+        }
+    };
+
+    return (
+<div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4" onClick={onClose}>
+    <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl transition-all transform scale-100 max-h-[90vh] overflow-y-auto" onClick={e =>
+        e.stopPropagation()}>
+        <div className="p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
+            <h3 className="text-2xl font-bold text-gray-800">{isEditing ? 'Edit Blotter Entry' : 'New Blotter Entry'}</h3>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <InputField label="Case Number" name="caseNumber" value={formData.caseNumber} readOnly={true} />
+                <InputField label="Date of Incident/Complaint" type="date" name="date" value={formData.date} onChange={handleChange} required />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <SelectField label="Type" name="type" value={formData.type} onChange={handleChange} options={['Complaint', 'Incident' , 'Dispute' ]} />
+                <SelectField label="Status" name="status" value={formData.status} onChange={handleChange} options={['Open', 'Resolved' , 'Referred' ]} />
+            </div>
+
+            <InputField label="Complainant/Victim Name" name="complainant" value={formData.complainant} onChange={handleChange} required />
+            <InputField label="Location/Hotspot (Purok/Street)" name="location" value={formData.location} onChange={handleChange} />
+
+            <TextareaField label="Detailed Description of Incident/Complaint" name="description" value={formData.description} onChange={handleChange} rows={4} required />
+
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Upload Supporting Files (Photos, Docs)</label>
+                <input type="file" onChange={handleFileChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 transition-colors" />
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-4">
+                <button type="button" onClick={onClose} className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors">
+                    Cancel
+                </button>
+                <button type="submit" disabled={loading} className="px-6 py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center">
+                    {loading ? 'Saving...' : (isEditing ? 'Save Changes' : 'Record Entry')}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+    );
+};
+
+// Report Generator Component
+const ReportGenerator = ({ blotterEntries, role }) => {
+    const [reportType, setReportType] = useState('Monthly');
+    const [loading, setLoading] = useState(false);
+
+    const canGenerate = ['Barangay Captain', 'Secretary'].includes(role);
+
+    const generateReportData = (type) => {
+        const now = new Date();
+        const filtered = blotterEntries.filter(entry => {
+            const entryDate = new Date(entry.date);
+            if (type === 'Daily') return entryDate.toDateString() === now.toDateString();
+            if (type === 'Monthly') return entryDate.getMonth() === now.getMonth() && entryDate.getFullYear() === now.getFullYear();
+            if (type === 'Annual') return entryDate.getFullYear() === now.getFullYear();
+            return true;
+        });
+
+        const statusSummary = filtered.reduce((acc, entry) => {
+            acc[entry.status] = (acc[entry.status] || 0) + 1;
+            return acc;
+        }, {});
+
+        return {
+            total: filtered.length,
+            summary: statusSummary,
+            details: filtered,
+        };
+    };
+
+    const handleGenerate = (format) => {
+        if (!canGenerate) {
+            alert('Authorization failed: Only Captain or Secretary can generate reports.');
+            return;
+        }
+
+        setLoading(true);
+        setTimeout(() => {
+            const report = generateReportData(reportType);
+            console.log(`--- Generated ${reportType} Report (${format}) ---`);
+            console.log("Summary:", report.summary);
+            console.log("Details:", report.details);
+            // In a real app, this would trigger a download.
+            alert(`Successfully generated ${reportType} Report in simulated ${format} format. Check console for data log.`);
+            setLoading(false);
+        }, 1000);
+    };
+
+    const report = generateReportData(reportType);
+
+    return (
+<div className="space-y-6">
+    <h2 className="text-3xl font-bold text-gray-800">Automated Report Generation</h2>
+
+    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100 space-y-4">
+        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+            <SelectField label="Select Report Type"
+                         name="reportType"
+                         value={reportType}
+                         onChange={(e) =>
+                setReportType(e.target.value)}
+                options={['Daily', 'Monthly', 'Annual', 'All Time']}
+                className="w-full sm:w-64"
+                />
+                <div className="flex space-x-3 w-full sm:w-auto">
+                    <button onClick={() =>
+                        handleGenerate('PDF')} disabled={!canGenerate || loading}
+                        className="flex items-center px-4 py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50">
+                        <Icon name="Download" className="w-5 h-5 mr-2" /> {loading ? 'Processing...' : 'Export PDF'}
+                    </button>
+                    <button onClick={() =>
+                        handleGenerate('Excel')} disabled={!canGenerate || loading}
+                        className="flex items-center px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50">
+                        <Icon name="Download" className="w-5 h-5 mr-2" /> {loading ? 'Processing...' : 'Export Excel'}
+                    </button>
+                </div>
+        </div>
+
+        <div className="mt-6 border-t pt-4">
+            <h3 className="text-xl font-semibold mb-3">Report Preview: {reportType}</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <Card title="Total Cases" value={report.total} color="bg-blue-500" icon="ClipboardList" />
+                <Card title="Open Cases" value={report.summary.Open || 0} color="bg-red-500" icon="FileText" />
+                <Card title="Resolved Cases" value={report.summary.Resolved || 0} color="bg-green-500" icon="Check" />
+            </div>
+
+            <p className="text-sm text-gray-500 mt-4">Showing {report.details.length} entries for the selected period.</p>
+        </div>
+    </div>
+</div>
+    );
+};
+
+// Chatbot Widget
+const ChatbotWidget = () => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [messages, setMessages] = useState([
+        { sender: 'bot', text: "Hello! I'm the Barangay eBlotter Assistant. How can I help you today?" },
+        { sender: 'bot', text: "Please select an option: **Submit a New Report** or **Check Report Status**." }
+    ]);
+    const [input, setInput] = useState('');
+
+    const handleSend = (userMessage) => {
+        if (!userMessage.trim() && userMessage !== 'Submit a New Report' && userMessage !== 'Check Report Status') return;
+
+        // Add user message
+        const newMessages = [...messages, { sender: 'user', text: userMessage }];
+        setMessages(newMessages);
+        setInput('');
+
+        // Simulate Bot Response based on keywords
+        const lowerMsg = userMessage.toLowerCase();
+        let botResponse = "I'm sorry, I don't understand that. Please try 'Submit a New Report' or 'Check Report Status'.";
+
+        if (lowerMsg.includes('new report') || lowerMsg.includes('submit')) {
+            botResponse = "To submit a new report, please visit the Barangay Hall or use the dedicated 'New Blotter Entry' button on the main system (if you are a registered official). If you are a resident, please proceed to the Barangay Hall immediately to file the incident report in person.";
+        } else if (lowerMsg.includes('status') || lowerMsg.includes('check')) {
+            botResponse = "To check your report status, please provide your 6-digit Case ID (e.g., INC-123456-ABC).";
+        } else if (lowerMsg.includes('inc-')) {
+             botResponse = `Case ID ${userMessage.toUpperCase()} found. Status: **Pending initial assessment**. Please wait for a Barangay Official to update the record.`;
+        }
+
+        setTimeout(() => {
+            setMessages(prev => [...prev, { sender: 'bot', text: botResponse }]);
+        }, 1000);
+    };
+
+    return (
+        <>
+<div className={`fixed bottom-4 right-4 z-40 transition-all duration-300 ${isOpen ? 'w-80 h-96' : 'w-16 h-16' }`}>
+    {/* Chat Window */}
+    {isOpen && (
+    <div className="bg-white rounded-xl shadow-2xl border border-gray-200 flex flex-col h-full overflow-hidden">
+        <div className="bg-blue-600 text-white p-3 flex justify-between items-center rounded-t-xl">
+            <h4 className="font-semibold flex items-center">
+                <Icon name="Bot" className="w-5 h-5 mr-2" /> eBlotter Assistant
+            </h4>
+            <button onClick={() =>
+                setIsOpen(false)} className="text-white hover:text-gray-200">
+                <Icon name="X" className="w-5 h-5" />
+            </button>
+        </div>
+        <div className="flex-1 p-3 space-y-3 overflow-y-auto text-sm custom-scrollbar">
+            {messages.map((msg, index) => (
+            <div key={index} className={`flex ${msg.sender= = ='user' ? 'justify-end' : 'justify-start' }`}>
+                <div className={`max-w-[80%] px-3 py-2 rounded-xl shadow-sm ${
+                     msg.sender= = ='user' ? 'bg-blue-100 text-gray-800' : 'bg-gray-100 text-gray-700'
+                     }`}
+                     dangerouslySetInnerHTML={{ __html: msg.text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }}>
+                </div>
+            </div>
+            ))}
+        </div>
+        <div className="p-3 border-t border-gray-200 flex">
+            <input type="text"
+                   value={input}
+                   onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSend(input)}
+            placeholder="Type your message..."
+            className="flex-1 p-2 border border-gray-300 rounded-l-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+            />
+            <button onClick={() =>
+                handleSend(input)} className="px-3 bg-blue-600 text-white rounded-r-lg hover:bg-blue-700 transition-colors">
+                Send
+            </button>
+        </div>
+    </div>
+    )}
+    {/* Toggle Button */}
+    <button onClick={() =>
+        setIsOpen(!isOpen)}
+        className={`absolute bottom-0 right-0 p-4 rounded-full shadow-lg transition-all duration-300 transform
+        ${isOpen ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
+        title={isOpen ? 'Close Chatbot' : 'Open Chatbot'}
+        >
+        <Icon name="Bot" className="w-7 h-7" />
+    </button>
+</div>
+
+            {/* Custom Scrollbar CSS for Chatbot */}
+<style jsx="true">
+    {
+        ` .custom-scrollbar::-webkit-scrollbar
+
+    {
+        width: 6px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+        background-color: #cbd5e1;
+        border-radius: 3px;
+    }
+
+    `
+    }
+</style>
+        </>
+    );
+};
+
+
+// Reusable Form Fields
+const InputField = ({ label, name, type = 'text', value, onChange, readOnly = false, required = false }) => (
+<div>
+    <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1">{label} {required && <span className="text-red-500">*</span>}</label>
+    <input id={name}
+           name={name}
+           type={type}
+           value={value || '' }
+           onChange={onChange}
+           readOnly={readOnly}
+           required={required}
+           className={`w-full p-2 border ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500' } rounded-lg transition`} />
+</div>
+);
+
+const TextareaField = ({ label, name, value, onChange, rows = 3, required = false }) => (
+<div>
+    <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1">{label} {required && <span className="text-red-500">*</span>}</label>
+    <textarea id={name}
+              name={name}
+              value={value || '' }
+              onChange={onChange}
+              rows={rows}
+              required={required}
+              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition"></textarea>
+</div>
+);
+
+const SelectField = ({ label, name, value, onChange, options, className = '' }) => (
+<div className={className}>
+    <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+    <select id={name}
+            name={name}
+            value={value}
+            onChange={onChange}
+            className="w-full p-2 border border-gray-300 bg-white rounded-lg focus:ring-blue-500 focus:border-blue-500 transition">
+        {options.map(option => (
+        <option key={option} value={option}>{option}</option>
+        ))}
+    </select>
+</div>
+);
+
+
+// --- Main Application Component ---
+const App = () => {
+    // 1. Firebase State and Initialization
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+
+    // 2. Application State
+    const [currentView, setCurrentView] = useState('dashboard'); // dashboard, blotter, reports, analytics
+    const [blotterEntries, setBlotterEntries] = useState([]);
+    const [currentRole, setCurrentRole] = useState(USER_ROLES[0]); // Default to Captain
+
+    // Effect for Firebase Initialization and Authentication
+    useEffect(() => {
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestore = getFirestore(app);
+            const authService = getAuth(app);
+
+            // Set debug log level for Firestore
+            // setLogLevel('debug'); // Uncomment for debugging
+
+            setDb(firestore);
+            setAuth(authService);
+
+            // Authentication Handler
+            const unsubscribe = onAuthStateChanged(authService, async (user) => {
+                if (user) {
+                    setUserId(user.uid);
+                    // Check if the user is already authenticated with the custom token
+                    if (!user.isAnonymous) {
+                        console.log("Authenticated with custom token:", user.uid);
+                    }
+                } else {
+                    // Sign in anonymously if no user is found
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(authService, initialAuthToken);
+                        } else {
+                            await signInAnonymously(authService);
+                        }
+                    } catch (error) {
+                        console.error("Firebase Auth Error:", error);
+                        setUserId(crypto.randomUUID()); // Fallback to a random ID
+                    }
+                }
+                setIsAuthReady(true);
+            });
+
+            return () => unsubscribe();
+        } catch (error) {
+            console.error("Failed to initialize Firebase:", error);
+            setIsAuthReady(true);
+        }
+    }, []);
+
+    // Effect for Firestore Data Subscription (Real-Time Blotter Entries)
+    useEffect(() => {
+        if (!db || !isAuthReady) return;
+
+        console.log("Attempting to listen to:", BLOTTER_COLLECTION_PATH);
+
+        const blotterQuery = query(collection(db, BLOTTER_COLLECTION_PATH));
+
+        // onSnapshot listener for real-time updates
+        const unsubscribe = onSnapshot(blotterQuery, (snapshot) => {
+            const entries = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            console.log("Fetched blotter entries:", entries.length);
+            setBlotterEntries(entries);
+        }, (error) => {
+            console.error("Error listening to blotter entries:", error);
+        });
+
+        // Cleanup subscription on component unmount
+        return () => unsubscribe();
+    }, [db, isAuthReady]);
+
+    // View Management
+    const renderContent = () => {
+        if (!isAuthReady || !userId || !db) {
+            return (
+<div className="flex justify-center items-center h-full">
+    <div className="p-8 bg-white rounded-xl shadow-xl text-lg font-medium text-blue-600">
+        Initializing System & Authenticating User...
+    </div>
+</div>
+            );
+        }
+
+        switch (currentView) {
+            case 'dashboard':
+                return
+<Dashboard blotterEntries={blotterEntries} />;
+            case 'blotter':
+                return
+<BlotterManager db={db}
+                userId={userId}
+                role={currentRole}
+                blotterEntries={blotterEntries} />;
+            case 'reports':
+                return
+<ReportGenerator blotterEntries={blotterEntries} role={currentRole} />;
+            default:
+                return
+<Dashboard blotterEntries={blotterEntries} />;
+        }
+    };
+
+    // Sidebar Navigation Data
+    const navItems = [
+        { name: 'Dashboard', view: 'dashboard', icon: 'LayoutDashboard' },
+        { name: 'Case Management', view: 'blotter', icon: 'ClipboardList' },
+        { name: 'Reports', view: 'reports', icon: 'FileText' },
+    ];
+
+    return (
+<div className="min-h-screen bg-gray-100 flex font-sans">
+    <style jsx="true">
+        {
+            ` body
+
+        {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .main-content-area {
+            /* Adjusted min-height for desktop to accommodate footer */
+            min-height: calc(100vh - 40px);
+        }
+
+        @media (min-width: 640px) {
+            .main-content-area {
+                min-height: calc(100vh - 40px);
+            }
+        }
+
+        `
+        }
+    </style>
+
+    {/* Header (Top Bar - Mobile Only) */}
+    <header className="bg-blue-700 text-white p-4 flex items-center justify-between shadow-lg sm:hidden sticky top-0 z-30">
+        <h1 className="text-lg font-bold">eBlotter System</h1>
+        {/* Mobile Menu Button Placeholder */}
+    </header>
+
+    {/* Sidebar (Desktop) / Navigation */}
+    <nav className="hidden sm:block w-64 bg-blue-800 text-white flex flex-col p-4 shadow-2xl sticky top-0 h-screen">
+        <h1 className="text-2xl font-extrabold mb-8 text-blue-100/90 tracking-wider">
+            Barangay eBlotter
+        </h1>
+
+        {navItems.map(item => (
+        <button key={item.view}
+                onClick={() =>
+            setCurrentView(item.view)}
+            className={`flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 mb-2
+            ${currentView === item.view
+            ? 'bg-blue-600 font-bold shadow-md'
+            : 'hover:bg-blue-700/70'
+            }`}
+            >
+            <Icon name={item.icon} className="w-5 h-5" />
+            <span className="text-base">{item.name}</span>
+        </button>
+        ))}
+
+        <div className="mt-auto pt-6 border-t border-blue-700">
+            <p className="text-xs text-blue-300 mb-2">Authenticated User</p>
+            <div className="bg-blue-700 p-3 rounded-lg text-sm">
+                <p className="font-semibold">{currentRole}</p>
+                <p className="text-xs break-all mt-1">ID: {userId}</p>
+            </div>
+
+            <SelectField label="Change Role (Demo)"
+                         name="role-switcher"
+                         value={currentRole}
+                         onChange={(e) =>
+                setCurrentRole(e.target.value)}
+                options={USER_ROLES}
+                className="mt-4"
+                />
+        </div>
+    </nav>
+
+    {/* Main Content Area */}
+    <div className="flex-1 flex flex-col">
+        <main className="flex-1 p-4 sm:p-8 overflow-y-auto main-content-area">
+            {renderContent()}
+        </main>
+
+        {/* Footer with Copyright */}
+        <footer className="bg-white border-t border-gray-200 p-2 text-center text-xs text-gray-500">
+            &copy; 2025 Barangay eBlotter System. All Rights Reserved by **Noel Timario**.
+        </footer>
+    </div>
+
+    {/* Floating Chatbot Widget */}
+    <ChatbotWidget />
+</div>
+    );
+};
+
+export default App;
